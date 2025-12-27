@@ -31,7 +31,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1.5"
-            android:text="Scan Geektime"
+            android:text="Scan..."
             android:textAllCaps="false"
             android:backgroundTint="@color/green"
             android:layout_marginEnd="8dp"/>
@@ -49,6 +49,8 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:scrollbars="none"
+        android:visibility="gone"
+        tools:visibility="visible"
         app:layout_constraintTop_toBottomOf="@+id/llHeader">
 
         <LinearLayout
@@ -59,48 +61,76 @@
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnPlay"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:minWidth="60dp"
-                android:paddingHorizontal="8dp"
-                android:text="Play"
-                android:textSize="12sp"
+                style="@style/Widget.MaterialComponents.Button.Icon"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:padding="0dp"
+                android:insetLeft="0dp"
+                android:insetTop="0dp"
+                android:insetRight="0dp"
+                android:insetBottom="0dp"
+                app:icon="@android:drawable/ic_media_play"
+                app:iconGravity="textStart"
+                app:iconPadding="0dp"
+                app:iconTint="@android:color/white"
                 android:backgroundTint="@color/green"
+                app:cornerRadius="24dp"
                 android:layout_marginEnd="4dp"/>
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnPause"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:minWidth="60dp"
-                android:paddingHorizontal="8dp"
-                android:text="Pause"
-                android:textSize="12sp"
+                style="@style/Widget.MaterialComponents.Button.Icon"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:padding="0dp"
+                android:insetLeft="0dp"
+                android:insetTop="0dp"
+                android:insetRight="0dp"
+                android:insetBottom="0dp"
+                app:icon="@android:drawable/ic_media_pause"
+                app:iconGravity="textStart"
+                app:iconPadding="0dp"
+                app:iconTint="@android:color/white"
                 android:backgroundTint="@color/green"
+                app:cornerRadius="24dp"
                 android:layout_marginEnd="4dp"/>
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnStop"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:minWidth="60dp"
-                android:paddingHorizontal="8dp"
-                android:text="Stop"
-                android:textSize="12sp"
+                style="@style/Widget.MaterialComponents.Button.Icon"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:padding="0dp"
+                android:insetLeft="0dp"
+                android:insetTop="0dp"
+                android:insetRight="0dp"
+                android:insetBottom="0dp"
+                app:icon="@drawable/ic_stop_square"
+                app:iconGravity="textStart"
+                app:iconPadding="0dp"
+                app:iconTint="@android:color/white"
                 android:backgroundTint="@color/green"
+                app:cornerRadius="24dp"
                 android:layout_marginEnd="4dp"/>
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnSkip"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:minWidth="60dp"
-                android:paddingHorizontal="8dp"
-                android:text="Skip"
-                android:textSize="12sp"
+                style="@style/Widget.MaterialComponents.Button.Icon"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:padding="0dp"
+                android:insetLeft="0dp"
+                android:insetTop="0dp"
+                android:insetRight="0dp"
+                android:insetBottom="0dp"
+                app:icon="@android:drawable/ic_media_next"
+                app:iconGravity="textStart"
+                app:iconPadding="0dp"
+                app:iconTint="@android:color/white"
                 android:backgroundTint="@color/green"
+                app:cornerRadius="24dp"
                 android:layout_marginEnd="8dp"/>
 
             <Button

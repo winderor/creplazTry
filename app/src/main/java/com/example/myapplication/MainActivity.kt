@@ -109,6 +109,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         rvArticles.layoutManager = LinearLayoutManager(this)
         rvArticles.adapter = adapter
 
+        // Load saved speed
+        val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
+        currentSpeed = sharedPrefs.getFloat("last_speed", 1.0f)
+
         // Swipe to remove
         val itemTouchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT) {
             override fun onMove(rv: RecyclerView, vh: RecyclerView.ViewHolder, t: RecyclerView.ViewHolder) = false
@@ -193,23 +197,29 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         btnSpeedUp.setOnClickListener {
             if (currentSpeed < 2.5f) {
                 currentSpeed += 0.1f
-                updateSpeed()
+                updateSpeedAndSave()
             }
         }
 
         btnSpeedDown.setOnClickListener {
             if (currentSpeed > 0.5f) {
                 currentSpeed -= 0.1f
-                updateSpeed()
+                updateSpeedAndSave()
             }
         }
 
         loadSavedArticles()
+        showSavedScheduleStatus()
     }
 
     private fun showScanDaysDialog() {
+        val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
+        val savedUrl = sharedPrefs.getString("last_url", "https://www.geektime.co.il/")
+        
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_scan_days, null)
         val etUrl = dialogView.findViewById<EditText>(R.id.etUrl)
+        etUrl.setText(savedUrl)
+        
         val btnMinus = dialogView.findViewById<Button>(R.id.btnMinus)
         val btnPlus = dialogView.findViewById<Button>(R.id.btnPlus)
         val tvDayCount = dialogView.findViewById<TextView>(R.id.tvDayCount)
@@ -234,6 +244,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             .setPositiveButton("Scan") { _, _ ->
                 val url = etUrl.text.toString()
                 if (url.isNotEmpty()) {
+                    sharedPrefs.edit().putString("last_url", url).apply()
                     startScanning(url, count)
                 } else {
                     Toast.makeText(this, "Please enter a URL", Toast.LENGTH_SHORT).show()
@@ -257,13 +268,26 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun showTimePicker() {
+        val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
+        val savedHour = sharedPrefs.getInt("schedule_hour", -1)
+        val savedMinute = sharedPrefs.getInt("schedule_minute", -1)
+        
         val calendar = Calendar.getInstance()
-        TimePickerDialog(this, { _, hour, minute ->
-            scheduleDailyScan(hour, minute)
-        }, calendar.get(Calendar.HOUR_OF_DAY), calendar.get(Calendar.MINUTE), true).show()
+        val hour = if (savedHour != -1) savedHour else calendar.get(Calendar.HOUR_OF_DAY)
+        val minute = if (savedMinute != -1) savedMinute else calendar.get(Calendar.MINUTE)
+
+        TimePickerDialog(this, { _, selectedHour, selectedMinute ->
+            saveAndScheduleDailyScan(selectedHour, selectedMinute)
+        }, hour, minute, true).show()
     }
 
-    private fun scheduleDailyScan(hour: Int, minute: Int) {
+    private fun saveAndScheduleDailyScan(hour: Int, minute: Int) {
+        val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
+        sharedPrefs.edit()
+            .putInt("schedule_hour", hour)
+            .putInt("schedule_minute", minute)
+            .apply()
+
         val now = Calendar.getInstance()
         val target = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, hour)
@@ -289,12 +313,28 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tvStatus.text = "Daily scan scheduled for $timeStr"
     }
 
-    private fun updateSpeed() {
+    private fun showSavedScheduleStatus() {
+        val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
+        val hour = sharedPrefs.getInt("schedule_hour", -1)
+        val minute = sharedPrefs.getInt("schedule_minute", -1)
+        
+        if (hour != -1 && minute != -1) {
+            val timeStr = String.format("%02d:%02d", hour, minute)
+            if (articlePlaylist.isEmpty()) {
+                tvStatus.text = "Next scan at $timeStr"
+            }
+        }
+    }
+
+    private fun updateSpeedAndSave() {
         val speedText = String.format("%.1fx", currentSpeed)
         tvSpeed.text = speedText
         if (ttsReady) {
             tts.setSpeechRate(currentSpeed)
         }
+        // Save speed
+        val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
+        sharedPrefs.edit().putFloat("last_speed", currentSpeed).apply()
     }
 
     override fun onInit(status: Int) {
@@ -305,7 +345,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
             
             ttsReady = true
-            updateSpeed()
+            updateSpeedAndSave()
             
             tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {}
@@ -329,8 +369,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
             })
             updateButtonStates()
-        } else {
-            runOnUiThread { tvStatus.text = "TTS engine error" }
         }
     }
 
@@ -361,7 +399,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun startScanning(url: String, daysBack: Int) {
-        tvStatus.text = "Scanning $url ($daysBack days back)..."
+        tvStatus.text = "Scanning..."
         btnScan.isEnabled = false
         lifecycleScope.launch {
             val articles = fetchYesterdayArticles(url, daysBack)
