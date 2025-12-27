@@ -146,13 +146,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
         
         btnPlay.setOnClickListener {
-            Log.d("Creplaz", "Play button clicked")
             if (articlePlaylist.isEmpty()) {
                 Toast.makeText(this, "No articles to play. Scan first.", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             if (!ttsReady) {
-                Toast.makeText(this, "Text-to-Speech is initializing...", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Speech engine starting...", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             
@@ -208,12 +207,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun updateButtonStates() {
         runOnUiThread {
-            // Keep all buttons enabled as requested by user
             btnPlay.isEnabled = true
             btnPause.isEnabled = true
             btnSkip.isEnabled = true
             btnStop.isEnabled = true
-            
             btnPlay.alpha = 1.0f
             btnPause.alpha = 1.0f
             btnSkip.alpha = 1.0f
@@ -264,10 +261,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            Log.d("TTS", "TTS engine initialized")
             val result = tts.setLanguage(Locale("he", "IL"))
             if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                Log.e("TTS", "Hebrew language not supported, using default")
                 tts.setLanguage(Locale.getDefault())
             }
             
@@ -275,11 +270,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             updateSpeed()
             
             tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {
-                    Log.d("TTS", "Utterance started: $utteranceId")
-                }
+                override fun onStart(utteranceId: String?) {}
                 override fun onDone(utteranceId: String?) {
-                    Log.d("TTS", "Utterance done: $utteranceId")
                     runOnUiThread {
                         if (isPlaying && articlePlaylist.isNotEmpty()) {
                             val removed = adapter.removeItem(0)
@@ -290,20 +282,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                             } else {
                                 isPlaying = false
                                 tvStatus.text = "All articles played"
-                                updateButtonStates()
                             }
                         }
                     }
                 }
                 override fun onError(utteranceId: String?) { 
-                    Log.e("TTS", "Utterance error: $utteranceId")
                     runOnUiThread { stopPlayback() }
                 }
             })
             updateButtonStates()
         } else {
-            Log.e("TTS", "TTS Initialization failed")
-            runOnUiThread { tvStatus.text = "Error: TTS Engine failed to initialize" }
+            runOnUiThread { tvStatus.text = "TTS engine error" }
         }
     }
 
@@ -318,7 +307,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (articlePlaylist.isNotEmpty()) {
             adapter.notifyDataSetChanged()
             hsvControls.visibility = View.VISIBLE
-            tvStatus.text = "Loaded ${articlePlaylist.size} articles"
+            tvStatus.text = "Loaded ${articlePlaylist.size} saved articles"
         }
         updateButtonStates()
     }
@@ -334,7 +323,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun startScanning() {
-        tvStatus.text = "Scanning Geektime..."
+        tvStatus.text = "Scanning..."
         btnScan.isEnabled = false
         lifecycleScope.launch {
             val articles = fetchYesterdayArticles()
@@ -358,7 +347,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 tvStatus.text = "Found $addedCount new articles."
                 hsvControls.visibility = View.VISIBLE
             } else {
-                tvStatus.text = "No new articles found."
+                tvStatus.text = "No articles found."
             }
             updateButtonStates()
         }
@@ -368,29 +357,35 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val result = mutableListOf<Article>()
         val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         try {
+            Log.d("Scraper", "Connecting to Geektime...")
             val doc = Jsoup.connect("https://www.geektime.co.il/")
                 .userAgent(userAgent).timeout(20000).get()
-            val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
-            val day = yesterday.get(Calendar.DAY_OF_MONTH).toString()
-            val month = (yesterday.get(Calendar.MONTH) + 1).toString().padStart(2, '0')
 
-            val elements = doc.select("article a[href], .post-item a[href], h2 a[href], h3 a[href]")
+            // Removed date restriction temporarily to find ANY articles
+            val elements = doc.select("article a[href], .post-item a[href], .elementor-post__title a, h2 a[href], h3 a[href]")
             val links = elements.map { it.attr("abs:href") }.distinct()
-                .filter { it.contains("geektime.co.il") && it.length > 35 }
+                .filter { it.contains("geektime.co.il") && it.length > 35 && !it.contains("/category/") }
+
+            Log.d("Scraper", "Found ${links.size} unique links")
 
             for (link in links) {
                 try {
                     val articleDoc = Jsoup.connect(link).userAgent(userAgent).timeout(10000).get()
-                    val dateText = articleDoc.select(".post-date, .entry-date, time").text()
-                    val title = articleDoc.title().split("|")[0].trim()
-                    if (dateText.contains(day) && (dateText.contains(month) || dateText.contains("."))) {
-                        val content = articleDoc.select(".entry-content p").text()
-                        if (content.length > 150) result.add(Article(title, content))
+                    val title = articleDoc.select("h1, .entry-title, .post-title").first()?.text() ?: articleDoc.title()
+                    val content = articleDoc.select(".entry-content p, .post-content p, article p").text()
+                    
+                    if (content.length > 100) {
+                        result.add(Article(title, content))
+                        Log.d("Scraper", "Success: $title")
                     }
-                } catch (e: Exception) {}
-                if (result.size >= 10) break 
+                } catch (e: Exception) {
+                    Log.e("Scraper", "Error link: $link")
+                }
+                if (result.size >= 8) break 
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Log.e("Scraper", "Main page error: ${e.message}")
+        }
         result
     }
 
@@ -398,32 +393,20 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (articlePlaylist.isNotEmpty() && isPlaying) {
             val article = articlePlaylist[0]
             runOnUiThread { tvStatus.text = "Playing: ${article.title}" }
-            
             val params = Bundle()
             val uid = "id_" + System.currentTimeMillis()
             params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, uid)
-            
-            val textToSpeak = "Title: ${article.title}. Content: ${article.content}"
-            Log.d("TTS", "Calling speak for: ${article.title}")
-            val speakResult = tts.speak(textToSpeak, TextToSpeech.QUEUE_FLUSH, params, uid)
-            if (speakResult == TextToSpeech.ERROR) {
-                Log.e("TTS", "tts.speak returned ERROR")
-                stopPlayback()
-                Toast.makeText(this, "Playback error", Toast.LENGTH_SHORT).show()
-            }
+            tts.speak("Title: ${article.title}. Content: ${article.content}", TextToSpeech.QUEUE_FLUSH, params, uid)
         } else {
             stopPlayback()
         }
     }
 
     private fun stopPlayback() {
-        Log.d("Creplaz", "stopPlayback called")
         isPlaying = false
-        if (ttsReady) {
-            tts.stop()
-        }
+        if (ttsReady) tts.stop()
         runOnUiThread { 
-            tvStatus.text = if (articlePlaylist.isEmpty()) "Scan to see articles" else "Playback stopped" 
+            tvStatus.text = if (articlePlaylist.isEmpty()) "Scan to see articles" else "Stopped" 
             updateButtonStates()
         }
     }

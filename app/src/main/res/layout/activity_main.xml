@@ -30,7 +30,7 @@
             android:id="@+id/btnScan"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
+            android:layout_weight="1.5"
             android:text="Scan Geektime"
             android:textAllCaps="false"
             android:backgroundTint="@color/green"
@@ -48,7 +48,6 @@
         android:id="@+id/hsvControls"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:visibility="gone"
         android:scrollbars="none"
         app:layout_constraintTop_toBottomOf="@+id/llHeader">
 
@@ -83,23 +82,23 @@
                 android:layout_marginEnd="4dp"/>
 
             <Button
-                android:id="@+id/btnSkip"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:minWidth="60dp"
-                android:paddingHorizontal="8dp"
-                android:text="Skip"
-                android:textSize="12sp"
-                android:backgroundTint="@color/green"
-                android:layout_marginEnd="4dp"/>
-
-            <Button
                 android:id="@+id/btnStop"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:minWidth="60dp"
                 android:paddingHorizontal="8dp"
                 android:text="Stop"
+                android:textSize="12sp"
+                android:backgroundTint="@color/green"
+                android:layout_marginEnd="4dp"/>
+
+            <Button
+                android:id="@+id/btnSkip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="60dp"
+                android:paddingHorizontal="8dp"
+                android:text="Skip"
                 android:textSize="12sp"
                 android:backgroundTint="@color/green"
                 android:layout_marginEnd="8dp"/>
