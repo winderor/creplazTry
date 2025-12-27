@@ -12,6 +12,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -208,6 +209,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun showScanDaysDialog() {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_scan_days, null)
+        val etUrl = dialogView.findViewById<EditText>(R.id.etUrl)
         val btnMinus = dialogView.findViewById<Button>(R.id.btnMinus)
         val btnPlus = dialogView.findViewById<Button>(R.id.btnPlus)
         val tvDayCount = dialogView.findViewById<TextView>(R.id.tvDayCount)
@@ -230,7 +232,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         AlertDialog.Builder(this)
             .setView(dialogView)
             .setPositiveButton("Scan") { _, _ ->
-                startScanning(count)
+                val url = etUrl.text.toString()
+                if (url.isNotEmpty()) {
+                    startScanning(url, count)
+                } else {
+                    Toast.makeText(this, "Please enter a URL", Toast.LENGTH_SHORT).show()
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -353,11 +360,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             .apply()
     }
 
-    private fun startScanning(daysBack: Int) {
-        tvStatus.text = "Scanning Geektime ($daysBack days back)..."
+    private fun startScanning(url: String, daysBack: Int) {
+        tvStatus.text = "Scanning $url ($daysBack days back)..."
         btnScan.isEnabled = false
         lifecycleScope.launch {
-            val articles = fetchYesterdayArticles(daysBack)
+            val articles = fetchYesterdayArticles(url, daysBack)
             btnScan.isEnabled = true
             if (articles.isNotEmpty()) {
                 val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
@@ -378,17 +385,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 tvStatus.text = "Found $addedCount new articles."
                 hsvControls.visibility = View.VISIBLE
             } else {
-                tvStatus.text = "No articles found for the selected period."
+                tvStatus.text = "No articles found."
             }
             updateButtonStates()
         }
     }
 
-    private suspend fun fetchYesterdayArticles(daysBack: Int): List<Article> = withContext(Dispatchers.IO) {
+    private suspend fun fetchYesterdayArticles(url: String, daysBack: Int): List<Article> = withContext(Dispatchers.IO) {
         val result = mutableListOf<Article>()
         val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         try {
-            val doc = Jsoup.connect("https://www.geektime.co.il/")
+            val doc = Jsoup.connect(url)
                 .userAgent(userAgent).timeout(20000).get()
 
             val targetDate = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -daysBack) }
@@ -397,7 +404,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
             val elements = doc.select("article a[href], .post-item a[href], .elementor-post__title a, h2 a[href], h3 a[href]")
             val links = elements.map { it.attr("abs:href") }.distinct()
-                .filter { it.contains("geektime.co.il") && it.length > 35 && !it.contains("/category/") }
+                .filter { it.contains(url.replace("https://www.", "").split("/")[0]) && it.length > 30 && !it.contains("/category/") }
 
             for (link in links) {
                 try {
@@ -405,7 +412,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     val dateText = articleDoc.select(".post-date, .entry-date, time").text()
                     val title = articleDoc.select("h1, .entry-title, .post-title").first()?.text() ?: articleDoc.title()
                     
-                    // Check if the article matches the specific day
                     if (dateText.contains(day) && (dateText.contains(month) || dateText.contains("."))) {
                         val content = articleDoc.select(".entry-content p, .post-content p, article p").text()
                         if (content.length > 100) {
