@@ -1,5 +1,6 @@
 package com.example.myapplication
 
+import android.app.AlertDialog
 import android.app.TimePickerDialog
 import android.content.Context
 import android.content.pm.PackageManager
@@ -138,7 +139,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tts = TextToSpeech(this, this)
 
         btnScan.setOnClickListener {
-            startScanning()
+            showScanDaysDialog()
         }
 
         btnSchedule.setOnClickListener {
@@ -203,6 +204,36 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         loadSavedArticles()
+    }
+
+    private fun showScanDaysDialog() {
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_scan_days, null)
+        val btnMinus = dialogView.findViewById<Button>(R.id.btnMinus)
+        val btnPlus = dialogView.findViewById<Button>(R.id.btnPlus)
+        val tvDayCount = dialogView.findViewById<TextView>(R.id.tvDayCount)
+        var count = 1
+
+        btnMinus.setOnClickListener {
+            if (count > 1) {
+                count--
+                tvDayCount.text = count.toString()
+            }
+        }
+
+        btnPlus.setOnClickListener {
+            if (count < 14) {
+                count++
+                tvDayCount.text = count.toString()
+            }
+        }
+
+        AlertDialog.Builder(this)
+            .setView(dialogView)
+            .setPositiveButton("Scan") { _, _ ->
+                startScanning(count)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun updateButtonStates() {
@@ -322,11 +353,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             .apply()
     }
 
-    private fun startScanning() {
-        tvStatus.text = "Scanning..."
+    private fun startScanning(daysBack: Int) {
+        tvStatus.text = "Scanning Geektime ($daysBack days back)..."
         btnScan.isEnabled = false
         lifecycleScope.launch {
-            val articles = fetchYesterdayArticles()
+            val articles = fetchYesterdayArticles(daysBack)
             btnScan.isEnabled = true
             if (articles.isNotEmpty()) {
                 val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
@@ -347,45 +378,44 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 tvStatus.text = "Found $addedCount new articles."
                 hsvControls.visibility = View.VISIBLE
             } else {
-                tvStatus.text = "No articles found."
+                tvStatus.text = "No articles found for the selected period."
             }
             updateButtonStates()
         }
     }
 
-    private suspend fun fetchYesterdayArticles(): List<Article> = withContext(Dispatchers.IO) {
+    private suspend fun fetchYesterdayArticles(daysBack: Int): List<Article> = withContext(Dispatchers.IO) {
         val result = mutableListOf<Article>()
         val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         try {
-            Log.d("Scraper", "Connecting to Geektime...")
             val doc = Jsoup.connect("https://www.geektime.co.il/")
                 .userAgent(userAgent).timeout(20000).get()
 
-            // Removed date restriction temporarily to find ANY articles
+            val targetDate = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -daysBack) }
+            val day = targetDate.get(Calendar.DAY_OF_MONTH).toString()
+            val month = (targetDate.get(Calendar.MONTH) + 1).toString().padStart(2, '0')
+
             val elements = doc.select("article a[href], .post-item a[href], .elementor-post__title a, h2 a[href], h3 a[href]")
             val links = elements.map { it.attr("abs:href") }.distinct()
                 .filter { it.contains("geektime.co.il") && it.length > 35 && !it.contains("/category/") }
 
-            Log.d("Scraper", "Found ${links.size} unique links")
-
             for (link in links) {
                 try {
                     val articleDoc = Jsoup.connect(link).userAgent(userAgent).timeout(10000).get()
+                    val dateText = articleDoc.select(".post-date, .entry-date, time").text()
                     val title = articleDoc.select("h1, .entry-title, .post-title").first()?.text() ?: articleDoc.title()
-                    val content = articleDoc.select(".entry-content p, .post-content p, article p").text()
                     
-                    if (content.length > 100) {
-                        result.add(Article(title, content))
-                        Log.d("Scraper", "Success: $title")
+                    // Check if the article matches the specific day
+                    if (dateText.contains(day) && (dateText.contains(month) || dateText.contains("."))) {
+                        val content = articleDoc.select(".entry-content p, .post-content p, article p").text()
+                        if (content.length > 100) {
+                            result.add(Article(title, content))
+                        }
                     }
-                } catch (e: Exception) {
-                    Log.e("Scraper", "Error link: $link")
-                }
-                if (result.size >= 8) break 
+                } catch (e: Exception) {}
+                if (result.size >= 10) break 
             }
-        } catch (e: Exception) {
-            Log.e("Scraper", "Main page error: ${e.message}")
-        }
+        } catch (e: Exception) {}
         result
     }
 
