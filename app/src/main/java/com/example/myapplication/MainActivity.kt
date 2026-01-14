@@ -113,16 +113,30 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
         currentSpeed = sharedPrefs.getFloat("last_speed", 1.0f)
 
-        // Swipe to remove
+        // Swipe to remove / skip
         val itemTouchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT) {
             override fun onMove(rv: RecyclerView, vh: RecyclerView.ViewHolder, t: RecyclerView.ViewHolder) = false
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
                 val position = viewHolder.adapterPosition
+                val wasPlayingThis = (position == 0 && isPlaying)
+                
                 val removedArticle = adapter.removeItem(position)
                 removedArticle?.let { removeArticleFromPrefs(it.title) }
+                
+                if (wasPlayingThis) {
+                    tts.stop()
+                    // Start next one if available
+                    if (articlePlaylist.isNotEmpty()) {
+                        playNext()
+                    } else {
+                        stopPlayback()
+                    }
+                }
+
                 if (articlePlaylist.isEmpty()) {
                     hsvControls.visibility = View.GONE
                     tvStatus.text = "All articles cleared"
+                    isPlaying = false
                 }
                 updateButtonStates()
             }
@@ -433,6 +447,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val result = mutableListOf<Article>()
         val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         try {
+            Log.d("Scraper", "Connecting to $url")
             val doc = Jsoup.connect(url)
                 .userAgent(userAgent).timeout(20000).get()
 
@@ -440,26 +455,34 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             val day = targetDate.get(Calendar.DAY_OF_MONTH).toString()
             val month = (targetDate.get(Calendar.MONTH) + 1).toString().padStart(2, '0')
 
-            val elements = doc.select("article a[href], .post-item a[href], .elementor-post__title a, h2 a[href], h3 a[href]")
+            // Broader selectors to find links
+            val elements = doc.select("article a[href], .post-item a[href], .elementor-post__title a, h2 a[href], h3 a[href], .entry-title a")
             val links = elements.map { it.attr("abs:href") }.distinct()
                 .filter { it.contains(url.replace("https://www.", "").split("/")[0]) && it.length > 30 && !it.contains("/category/") }
+
+            Log.d("Scraper", "Found ${links.size} candidate links")
 
             for (link in links) {
                 try {
                     val articleDoc = Jsoup.connect(link).userAgent(userAgent).timeout(10000).get()
-                    val dateText = articleDoc.select(".post-date, .entry-date, time").text()
+                    val dateText = articleDoc.select(".post-date, .entry-date, time, .date, .meta").text()
                     val title = articleDoc.select("h1, .entry-title, .post-title").first()?.text() ?: articleDoc.title()
                     
-                    if (dateText.contains(day) && (dateText.contains(month) || dateText.contains("."))) {
-                        val content = articleDoc.select(".entry-content p, .post-content p, article p").text()
+                    if (dateText.contains(day) && (dateText.contains(month) || dateText.contains(".") || dateText.isEmpty())) {
+                        val content = articleDoc.select(".entry-content p, .post-content p, article p, .post-text p").text()
                         if (content.length > 100) {
                             result.add(Article(title, content))
+                            Log.d("Scraper", "Added: $title")
                         }
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) {
+                    Log.e("Scraper", "Error link: $link")
+                }
                 if (result.size >= 10) break 
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Log.e("Scraper", "Error scanning $url: ${e.message}")
+        }
         result
     }
 
