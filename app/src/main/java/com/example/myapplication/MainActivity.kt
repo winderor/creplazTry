@@ -4,6 +4,7 @@ import android.app.AlertDialog
 import android.app.TimePickerDialog
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -29,31 +30,83 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
+import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
 
-data class Article(val title: String, val content: String)
+data class Article(val title: String, val content: String, val date: String = "Recent")
 
-class ArticleAdapter(private val articles: MutableList<Article>) : RecyclerView.Adapter<ArticleAdapter.ViewHolder>() {
-    class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+class ArticleAdapter(private val articles: MutableList<Article>) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+    private val TYPE_HEADER = 0
+    private val TYPE_ITEM = 1
+
+    private var displayList = mutableListOf<Any>()
+
+    init {
+        updateDisplayList()
+    }
+
+    fun updateDisplayList() {
+        displayList.clear()
+        val sortedArticles = articles.sortedByDescending { it.date }
+        val grouped = sortedArticles.groupBy { it.date }
+        grouped.forEach { (date, items) ->
+            displayList.add(date)
+            displayList.addAll(items)
+        }
+        notifyDataSetChanged()
+    }
+
+    class HeaderViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val tvDate: TextView = view.findViewById(R.id.tvTitle)
+    }
+
+    class ItemViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val tvTitle: TextView = view.findViewById(R.id.tvTitle)
     }
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+
+    override fun getItemViewType(position: Int): Int {
+        return if (displayList[position] is String) TYPE_HEADER else TYPE_ITEM
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
         val view = LayoutInflater.from(parent.context).inflate(R.layout.item_article, parent, false)
-        return ViewHolder(view)
+        return if (viewType == TYPE_HEADER) HeaderViewHolder(view) else ItemViewHolder(view)
     }
-    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        holder.tvTitle.text = articles[position].title
+
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        if (holder is HeaderViewHolder) {
+            holder.tvDate.text = displayList[position] as String
+            holder.tvDate.setBackgroundColor(Color.TRANSPARENT)
+            holder.tvDate.setTextColor(Color.GRAY)
+            holder.tvDate.textSize = 10f
+            holder.tvDate.setPadding(32, 8, 32, 0)
+        } else if (holder is ItemViewHolder) {
+            val article = displayList[position] as Article
+            holder.tvTitle.text = article.title
+            holder.tvTitle.setBackgroundColor(Color.WHITE)
+            holder.tvTitle.setTextColor(Color.BLACK)
+            holder.tvTitle.textSize = 16f
+            holder.tvTitle.setPadding(32, 16, 32, 16)
+        }
     }
-    override fun getItemCount() = articles.size
+
+    override fun getItemCount() = displayList.size
     
     fun removeItem(position: Int): Article? {
-        if (position in articles.indices) {
-            val removed = articles.removeAt(position)
-            notifyItemRemoved(position)
-            return removed
+        if (position in displayList.indices) {
+            val item = displayList[position]
+            if (item is Article) {
+                articles.remove(item)
+                updateDisplayList()
+                return item
+            }
         }
         return null
+    }
+
+    fun isHeader(position: Int): Boolean {
+        return position in displayList.indices && displayList[position] is String
     }
 }
 
@@ -109,34 +162,26 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         rvArticles.layoutManager = LinearLayoutManager(this)
         rvArticles.adapter = adapter
 
-        // Load saved speed
         val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
         currentSpeed = sharedPrefs.getFloat("last_speed", 1.0f)
 
-        // Swipe to remove / skip
         val itemTouchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT) {
+            override fun getSwipeDirs(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder): Int {
+                // Disable swipe for headers
+                if (adapter.isHeader(viewHolder.adapterPosition)) return 0
+                return super.getSwipeDirs(recyclerView, viewHolder)
+            }
+
             override fun onMove(rv: RecyclerView, vh: RecyclerView.ViewHolder, t: RecyclerView.ViewHolder) = false
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
                 val position = viewHolder.adapterPosition
-                val wasPlayingThis = (position == 0 && isPlaying)
-                
                 val removedArticle = adapter.removeItem(position)
-                removedArticle?.let { removeArticleFromPrefs(it.title) }
-                
-                if (wasPlayingThis) {
-                    tts.stop()
-                    // Start next one if available
-                    if (articlePlaylist.isNotEmpty()) {
+                removedArticle?.let { 
+                    removeArticleFromPrefs(it.title)
+                    if (isPlaying && articlePlaylist.isNotEmpty() && articlePlaylist[0].title == it.title) {
+                        tts.stop()
                         playNext()
-                    } else {
-                        stopPlayback()
                     }
-                }
-
-                if (articlePlaylist.isEmpty()) {
-                    hsvControls.visibility = View.GONE
-                    tvStatus.text = "All articles cleared"
-                    isPlaying = false
                 }
                 updateButtonStates()
             }
@@ -190,8 +235,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         btnSkip.setOnClickListener {
             if (articlePlaylist.isNotEmpty()) {
                 tts.stop()
-                val removed = adapter.removeItem(0)
-                removed?.let { removeArticleFromPrefs(it.title) }
+                val removed = articlePlaylist.removeAt(0)
+                removeArticleFromPrefs(removed.title)
+                adapter.updateDisplayList()
                 
                 if (articlePlaylist.isEmpty()) {
                     hsvControls.visibility = View.GONE
@@ -260,8 +306,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 if (url.isNotEmpty()) {
                     sharedPrefs.edit().putString("last_url", url).apply()
                     startScanning(url, count)
-                } else {
-                    Toast.makeText(this, "Please enter a URL", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -285,7 +329,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
         val savedHour = sharedPrefs.getInt("schedule_hour", -1)
         val savedMinute = sharedPrefs.getInt("schedule_minute", -1)
-        
         val calendar = Calendar.getInstance()
         val hour = if (savedHour != -1) savedHour else calendar.get(Calendar.HOUR_OF_DAY)
         val minute = if (savedMinute != -1) savedMinute else calendar.get(Calendar.MINUTE)
@@ -297,11 +340,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun saveAndScheduleDailyScan(hour: Int, minute: Int) {
         val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
-        sharedPrefs.edit()
-            .putInt("schedule_hour", hour)
-            .putInt("schedule_minute", minute)
-            .apply()
-
+        sharedPrefs.edit().putInt("schedule_hour", hour).putInt("schedule_minute", minute).apply()
         val now = Calendar.getInstance()
         val target = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, hour)
@@ -309,20 +348,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             set(Calendar.SECOND, 0)
         }
         if (target.before(now)) target.add(Calendar.DAY_OF_YEAR, 1)
-
         val delay = target.timeInMillis - now.timeInMillis
-        
         val scanRequest = PeriodicWorkRequestBuilder<ScanWorker>(24, TimeUnit.HOURS)
             .setInitialDelay(delay, TimeUnit.MILLISECONDS)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
-
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "daily_scan",
-            ExistingPeriodicWorkPolicy.REPLACE,
-            scanRequest
-        )
-        
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork("daily_scan", ExistingPeriodicWorkPolicy.REPLACE, scanRequest)
         val timeStr = String.format("%02d:%02d", hour, minute)
         tvStatus.text = "Daily scan scheduled for $timeStr"
     }
@@ -331,56 +362,38 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
         val hour = sharedPrefs.getInt("schedule_hour", -1)
         val minute = sharedPrefs.getInt("schedule_minute", -1)
-        
         if (hour != -1 && minute != -1) {
             val timeStr = String.format("%02d:%02d", hour, minute)
-            if (articlePlaylist.isEmpty()) {
-                tvStatus.text = "Next scan at $timeStr"
-            }
+            if (articlePlaylist.isEmpty()) tvStatus.text = "Next scan at $timeStr"
         }
     }
 
     private fun updateSpeedAndSave() {
         val speedText = String.format("%.1fx", currentSpeed)
         tvSpeed.text = speedText
-        if (ttsReady) {
-            tts.setSpeechRate(currentSpeed)
-        }
-        // Save speed
+        if (ttsReady) tts.setSpeechRate(currentSpeed)
         val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
         sharedPrefs.edit().putFloat("last_speed", currentSpeed).apply()
     }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            val result = tts.setLanguage(Locale("he", "IL"))
-            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                tts.setLanguage(Locale.getDefault())
-            }
-            
+            tts.setLanguage(Locale("he", "IL"))
             ttsReady = true
             updateSpeedAndSave()
-            
             tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {}
                 override fun onDone(utteranceId: String?) {
                     runOnUiThread {
                         if (isPlaying && articlePlaylist.isNotEmpty()) {
-                            val removed = adapter.removeItem(0)
-                            removed?.let { removeArticleFromPrefs(it.title) }
-                            
-                            if (articlePlaylist.isNotEmpty()) {
-                                playNext()
-                            } else {
-                                isPlaying = false
-                                tvStatus.text = "All articles played"
-                            }
+                            val removed = articlePlaylist.removeAt(0)
+                            removeArticleFromPrefs(removed.title)
+                            adapter.updateDisplayList()
+                            if (articlePlaylist.isNotEmpty()) playNext() else stopPlayback()
                         }
                     }
                 }
-                override fun onError(utteranceId: String?) { 
-                    runOnUiThread { stopPlayback() }
-                }
+                override fun onError(utteranceId: String?) { runOnUiThread { stopPlayback() } }
             })
             updateButtonStates()
         }
@@ -392,10 +405,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         articlePlaylist.clear()
         titles.forEach { title ->
             val content = sharedPrefs.getString("article_content_$title", "") ?: ""
-            articlePlaylist.add(Article(title, content))
+            val date = sharedPrefs.getString("article_date_$title", "Saved") ?: "Saved"
+            articlePlaylist.add(Article(title, content, date))
         }
         if (articlePlaylist.isNotEmpty()) {
-            adapter.notifyDataSetChanged()
+            adapter.updateDisplayList()
             hsvControls.visibility = View.VISIBLE
             tvStatus.text = "Loaded ${articlePlaylist.size} saved articles"
         }
@@ -409,6 +423,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         sharedPrefs.edit()
             .putStringSet("article_titles", titles)
             .remove("article_content_$title")
+            .remove("article_date_$title")
             .apply()
     }
 
@@ -416,74 +431,57 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tvStatus.text = "Scanning..."
         btnScan.isEnabled = false
         lifecycleScope.launch {
-            val articles = fetchYesterdayArticles(url, daysBack)
-            btnScan.isEnabled = true
-            if (articles.isNotEmpty()) {
+            val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            try {
+                val doc = withContext(Dispatchers.IO) { Jsoup.connect(url).userAgent(userAgent).timeout(20000).get() }
+                val elements = doc.select("article a[href], .post-item a[href], .elementor-post__title a, h2 a[href], h3 a[href], .entry-title a")
+                val links = elements.map { it.attr("abs:href") }.distinct()
+                    .filter { it.contains(url.replace("https://www.", "").split("/")[0]) && it.length > 30 && !it.contains("/category/") }
+
                 val sharedPrefs = getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
-                val existingTitles = sharedPrefs.getStringSet("article_titles", emptySet()) ?: emptySet()
-                
                 var addedCount = 0
-                articles.forEach { article ->
-                    if (!existingTitles.contains(article.title)) {
-                        articlePlaylist.add(article)
-                        sharedPrefs.edit().putString("article_content_${article.title}", article.content).apply()
-                        addedCount++
-                    }
+
+                for (link in links) {
+                    try {
+                        val articleDoc = withContext(Dispatchers.IO) { Jsoup.connect(link).userAgent(userAgent).timeout(10000).get() }
+                        val fullDateText = articleDoc.select(".post-date, .entry-date, time, .date, .meta").first()?.text() ?: "Today"
+                        
+                        val dateParts = fullDateText.split(" ").filter { it.contains(".") || it.length > 3 }
+                        val groupDate = if (dateParts.isNotEmpty()) dateParts[0] else "Today"
+
+                        val title = articleDoc.select("h1, .entry-title, .post-title").first()?.text() ?: articleDoc.title()
+                        val content = articleDoc.select(".entry-content p, .post-content p, article p").text()
+                        
+                        if (content.length > 100) {
+                            val existingTitles = sharedPrefs.getStringSet("article_titles", emptySet()) ?: emptySet()
+                            if (!existingTitles.contains(title)) {
+                                val article = Article(title, content, groupDate)
+                                articlePlaylist.add(article)
+                                addedCount++
+                                
+                                runOnUiThread {
+                                    adapter.updateDisplayList()
+                                    tvStatus.text = "Found $addedCount articles..."
+                                    hsvControls.visibility = View.VISIBLE
+                                }
+
+                                val newTitles = existingTitles.toMutableSet()
+                                newTitles.add(title)
+                                sharedPrefs.edit()
+                                    .putStringSet("article_titles", newTitles)
+                                    .putString("article_content_$title", content)
+                                    .putString("article_date_$title", groupDate)
+                                    .apply()
+                            }
+                        }
+                    } catch (e: Exception) {}
+                    if (articlePlaylist.size >= 40) break
                 }
-                val allTitles = articlePlaylist.map { it.title }.toSet()
-                sharedPrefs.edit().putStringSet("article_titles", allTitles).apply()
-                
-                adapter.notifyDataSetChanged()
-                tvStatus.text = "Found $addedCount new articles."
-                hsvControls.visibility = View.VISIBLE
-            } else {
-                tvStatus.text = "No articles found."
-            }
+                tvStatus.text = if (addedCount > 0) "Scan complete. $addedCount new items." else "No new articles found."
+            } catch (e: Exception) { tvStatus.text = "Scan failed." }
+            btnScan.isEnabled = true
             updateButtonStates()
         }
-    }
-
-    private suspend fun fetchYesterdayArticles(url: String, daysBack: Int): List<Article> = withContext(Dispatchers.IO) {
-        val result = mutableListOf<Article>()
-        val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        try {
-            Log.d("Scraper", "Connecting to $url")
-            val doc = Jsoup.connect(url)
-                .userAgent(userAgent).timeout(20000).get()
-
-            val targetDate = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -daysBack) }
-            val day = targetDate.get(Calendar.DAY_OF_MONTH).toString()
-            val month = (targetDate.get(Calendar.MONTH) + 1).toString().padStart(2, '0')
-
-            // Broader selectors to find links
-            val elements = doc.select("article a[href], .post-item a[href], .elementor-post__title a, h2 a[href], h3 a[href], .entry-title a")
-            val links = elements.map { it.attr("abs:href") }.distinct()
-                .filter { it.contains(url.replace("https://www.", "").split("/")[0]) && it.length > 30 && !it.contains("/category/") }
-
-            Log.d("Scraper", "Found ${links.size} candidate links")
-
-            for (link in links) {
-                try {
-                    val articleDoc = Jsoup.connect(link).userAgent(userAgent).timeout(10000).get()
-                    val dateText = articleDoc.select(".post-date, .entry-date, time, .date, .meta").text()
-                    val title = articleDoc.select("h1, .entry-title, .post-title").first()?.text() ?: articleDoc.title()
-                    
-                    if (dateText.contains(day) && (dateText.contains(month) || dateText.contains(".") || dateText.isEmpty())) {
-                        val content = articleDoc.select(".entry-content p, .post-content p, article p, .post-text p").text()
-                        if (content.length > 100) {
-                            result.add(Article(title, content))
-                            Log.d("Scraper", "Added: $title")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e("Scraper", "Error link: $link")
-                }
-                if (result.size >= 10) break 
-            }
-        } catch (e: Exception) {
-            Log.e("Scraper", "Error scanning $url: ${e.message}")
-        }
-        result
     }
 
     private fun playNext() {
