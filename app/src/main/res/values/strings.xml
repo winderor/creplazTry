@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">creplaz</string>
+    <string-array name="source_types">
+        <item>Website</item>
+        <item>Telegram</item>
+    </string-array>
 </resources>
