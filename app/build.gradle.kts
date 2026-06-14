@@ -41,11 +41,11 @@ tasks.matching { it.name.startsWith("assemble") }.all {
 }
 
 android {
-    namespace = "com.example.myapplication"
+    namespace = "com.creplaz.newslistener"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.myapplication"
+        applicationId = "com.creplaz.newslistener"
         minSdk = 24
         targetSdk = 36
         versionCode = vCode
@@ -56,7 +56,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

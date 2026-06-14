@@ -1,9 +1,10 @@
-package com.example.myapplication
+package com.creplaz.newslistener
 
 import android.app.AlertDialog
 import android.app.TimePickerDialog
 import android.content.*
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.*
 import android.view.*
 import android.widget.*
@@ -25,9 +26,9 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
 
-data class Article(val title: String, val content: String, val date: String = "Recent")
+data class Article(val title: String, val content: String, val date: String = "Recent", val url: String = "")
 
-class ArticleAdapter(private val articles: MutableList<Article>) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+class ArticleAdapter(private val articles: MutableList<Article>, private val onItemClick: (Article) -> Unit) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     private val typeHeader = 0
     private val typeItem = 1
     private var displayList = mutableListOf<Any>()
@@ -72,8 +73,13 @@ class ArticleAdapter(private val articles: MutableList<Article>) : RecyclerView.
         }
     }
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-        if (holder is HeaderViewHolder) holder.tvDate.text = displayList[position] as String
-        else if (holder is ItemViewHolder) holder.tvTitle.text = (displayList[position] as Article).title
+        if (holder is HeaderViewHolder) {
+            holder.tvDate.text = displayList[position] as String
+        } else if (holder is ItemViewHolder) {
+            val article = displayList[position] as Article
+            holder.tvTitle.text = article.title
+            holder.itemView.setOnClickListener { onItemClick(article) }
+        }
     }
     override fun getItemCount() = displayList.size
     fun removeItem(position: Int): Article? {
@@ -131,6 +137,7 @@ class MainActivity : AppCompatActivity() {
                 
                 runOnUiThread {
                     tvStatus.text = if (isPlaying) "Playing: $topTitle" else if (playlistSize > 0) "Paused" else "No articles"
+
                     if (playlistSize != articlePlaylist.size) {
                         loadSavedArticles()
                     }
@@ -164,7 +171,16 @@ class MainActivity : AppCompatActivity() {
         tvVersion = findViewById(R.id.tvVersion)
         rvArticles = findViewById(R.id.rvArticles)
         
-        adapter = ArticleAdapter(articlePlaylist)
+        adapter = ArticleAdapter(articlePlaylist) { article ->
+            if (article.url.isNotEmpty()) {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(article.url))
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Could not open link", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
         rvArticles.layoutManager = LinearLayoutManager(this)
         rvArticles.adapter = adapter
 
@@ -242,7 +258,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showScanDaysDialog() {
         val sharedPrefs = getSharedPreferences("creplaz_prefs", MODE_PRIVATE)
-        val savedSources = sharedPrefs.getString("scan_sources", "telegram|https://t.me/geektime") ?: "telegram|https://t.me/geektime"
+        val savedSources = sharedPrefs.getString("scan_sources", "telegram|https://t.me/geektimecoil") ?: "telegram|https://t.me/geektime"
         val savedDays = sharedPrefs.getInt("last_days_back", 1)
         
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_scan_days, null)
@@ -373,6 +389,7 @@ class MainActivity : AppCompatActivity() {
                         putStringSet("history_titles", newHistory)
                         putString("article_content_$title", content)
                         putString("article_date_$title", groupDate)
+                        putString("article_url_$title", link)
                     }
                 }
             } catch (_: Exception) {}
@@ -438,7 +455,8 @@ class MainActivity : AppCompatActivity() {
         titles.forEach { title ->
             val content = sharedPrefs.getString("article_content_$title", "") ?: ""
             val date = sharedPrefs.getString("article_date_$title", "Saved") ?: "Saved"
-            articlePlaylist.add(Article(title, content, date))
+            val url = sharedPrefs.getString("article_url_$title", "") ?: ""
+            articlePlaylist.add(Article(title, content, date, url))
         }
         runOnUiThread {
             if (articlePlaylist.isNotEmpty()) {
@@ -453,6 +471,11 @@ class MainActivity : AppCompatActivity() {
         val sharedPrefs = getSharedPreferences("creplaz_prefs", MODE_PRIVATE)
         val titles = sharedPrefs.getStringSet("article_titles", emptySet())?.toMutableSet() ?: mutableSetOf()
         titles.remove(title)
-        sharedPrefs.edit { putStringSet("article_titles", titles); remove("article_content_$title"); remove("article_date_$title") }
+        sharedPrefs.edit { 
+            putStringSet("article_titles", titles)
+            remove("article_content_$title")
+            remove("article_date_$title")
+            remove("article_url_$title")
+        }
     }
 }

@@ -1,4 +1,4 @@
-package com.example.myapplication
+package com.creplaz.newslistener
 
 import android.app.*
 import android.content.Intent
@@ -9,6 +9,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import androidx.core.content.edit
 import androidx.core.app.NotificationCompat
 import androidx.media.app.NotificationCompat as MediaStyleNotification
 import java.util.*
@@ -24,6 +25,21 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
     private var lastCharIndex = 0
     private var currentArticleText = ""
     private var currentUtteranceId: String? = null
+    private var currentTimeSecs = 0
+
+    private val updateHandler = Handler(Looper.getMainLooper())
+    private val updateRunnable = object : Runnable {
+        override fun run() {
+            if (isPlaying) {
+                currentTimeSecs++
+                val estimatedIndex = currentTimeSecs * 15
+                if (estimatedIndex > lastCharIndex) {
+                    lastCharIndex = minOf(estimatedIndex, currentArticleText.length)
+                }
+                updateHandler.postDelayed(this, 1000)
+            }
+        }
+    }
 
     private val binder = LocalBinder()
 
@@ -78,8 +94,10 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
                     if (utteranceId != currentUtteranceId) return
                     Handler(Looper.getMainLooper()).post {
                         if (isPlaying && playlist.isNotEmpty()) {
-                            playlist.removeAt(0)
+                            val removed = playlist.removeAt(0)
+                            removeArticleFromPrefs(removed.title)
                             lastCharIndex = 0
+                            currentArticleText = "" 
                             if (playlist.isNotEmpty()) {
                                 playNext()
                             } else {
@@ -96,8 +114,21 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
                 override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
                     val offset = utteranceId?.split("_offset_")?.lastOrNull()?.toIntOrNull() ?: 0
                     lastCharIndex = offset + start
+                    updateUI()
                 }
             })
+        }
+    }
+
+    private fun removeArticleFromPrefs(title: String) {
+        val sharedPrefs = getSharedPreferences("creplaz_prefs", MODE_PRIVATE)
+        val titles = sharedPrefs.getStringSet("article_titles", emptySet())?.toMutableSet() ?: mutableSetOf()
+        titles.remove(title)
+        sharedPrefs.edit { 
+            putStringSet("article_titles", titles)
+            remove("article_content_$title")
+            remove("article_date_$title")
+            remove("article_url_$title")
         }
     }
 
@@ -122,7 +153,6 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
         updateMediaSessionState(PlaybackStateCompat.STATE_PLAYING)
         val topArticle = playlist[0]
         
-        // Update metadata for lock screen
         mediaSession?.setMetadata(MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, topArticle.title)
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, "Creplaz News")
@@ -136,6 +166,9 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
         }
         showNotification()
         updateUI()
+        
+        updateHandler.removeCallbacks(updateRunnable)
+        updateHandler.postDelayed(updateRunnable, 1000)
     }
 
     fun pause() {
@@ -145,13 +178,15 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
         updateMediaSessionState(PlaybackStateCompat.STATE_PAUSED)
         showNotification()
         updateUI()
+        updateHandler.removeCallbacks(updateRunnable)
     }
 
     fun skip() {
         tts.stop()
         lastCharIndex = 0
         if (playlist.isNotEmpty()) {
-            playlist.removeAt(0)
+            val removed = playlist.removeAt(0)
+            removeArticleFromPrefs(removed.title)
             if (playlist.isEmpty()) {
                 stop()
             } else {
@@ -165,9 +200,11 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
         currentUtteranceId = null
         tts.stop()
         lastCharIndex = 0
+        currentTimeSecs = 0
         updateMediaSessionState(PlaybackStateCompat.STATE_STOPPED)
         stopForeground(STOP_FOREGROUND_REMOVE)
         updateUI()
+        updateHandler.removeCallbacks(updateRunnable)
     }
 
     private fun playNext() {
@@ -175,6 +212,7 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
             val article = playlist[0]
             currentArticleText = "Title: ${article.title}. Content: ${article.content}"
             lastCharIndex = 0
+            currentTimeSecs = 0
             
             mediaSession?.setMetadata(MediaMetadataCompat.Builder()
                 .putString(MediaMetadataCompat.METADATA_KEY_TITLE, article.title)
@@ -282,10 +320,31 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
         intent.putExtra("isPlaying", isPlaying)
         intent.putExtra("playlistSize", playlist.size)
         intent.putExtra("topTitle", if (playlist.isNotEmpty()) playlist[0].title else "")
+        
         sendBroadcast(intent)
     }
 
+    private fun formatTime(seconds: Int): String {
+        val m = seconds / 60
+        val s = seconds % 60
+        return String.format(Locale.getDefault(), "%02d:%02d", m, s)
+    }
+
+    fun seekTo(progressPercentage: Int) {
+        if (currentArticleText.isNotEmpty()) {
+            val newIndex = (currentArticleText.length * progressPercentage) / 100
+            lastCharIndex = newIndex
+            currentTimeSecs = lastCharIndex / 15
+            if (isPlaying) {
+                resumeAt(lastCharIndex)
+            } else {
+                updateUI()
+            }
+        }
+    }
+
     override fun onDestroy() {
+        updateHandler.removeCallbacks(updateRunnable)
         tts.shutdown()
         mediaSession?.release()
         super.onDestroy()

@@ -1,4 +1,4 @@
-package com.example.myapplication
+package com.creplaz.newslistener
 
 import android.content.Context
 import android.util.Log
