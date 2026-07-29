@@ -226,7 +226,6 @@ class MainActivity : AppCompatActivity() {
         btnPause.setOnClickListener { playbackService?.pause() }
         btnSkip.setOnClickListener { 
             playbackService?.skip() 
-            loadSavedArticles()
         }
         btnStop.setOnClickListener { playbackService?.stop() }
 
@@ -371,7 +370,31 @@ class MainActivity : AppCompatActivity() {
                 if (articleDate != null && articleDate.before(limitDate)) continue
                 val groupDate = if (articleDate != null) sdf.format(articleDate) else "Recent"
                 val title = articleDoc.select("h1, .entry-title").first()?.text() ?: articleDoc.title()
-                val content = articleDoc.select(".entry-content p, article p").text()
+                
+                // Improved content extraction: filter out English-only paragraphs at the end of Hebrew articles
+                val paragraphs = articleDoc.select(".entry-content p, article p")
+                val contentBuilder = StringBuilder()
+                var hasHebrewInArticle = false
+                
+                val pTexts = paragraphs.map { it.text() }.filter { it.length > 20 }
+                
+                for (pText in pTexts) {
+                    val hasHebrew = pText.any { it in '\u0590'..'\u05FF' }
+                    if (hasHebrew) hasHebrewInArticle = true
+                    
+                    // Heuristic: If this is a Hebrew article and we hit a paragraph with NO Hebrew 
+                    // that is significantly long, it might be the English research paper starting.
+                    if (hasHebrewInArticle && !hasHebrew && pText.length > 200) {
+                        // Check if the rest of the paragraphs are also English
+                        val remaining = pTexts.subList(pTexts.indexOf(pText), pTexts.size)
+                        val anyHebrewLeft = remaining.any { rel -> rel.any { c -> c in '\u0590'..'\u05FF' } }
+                        if (!anyHebrewLeft) break // Stop here, it's all English now
+                    }
+                    
+                    contentBuilder.append(pText).append(" ")
+                }
+                
+                val content = contentBuilder.toString().trim()
                 
                 val currentTitles = sharedPrefs.getStringSet("article_titles", emptySet()) ?: emptySet()
                 val historyTitles = sharedPrefs.getStringSet("history_titles", emptySet()) ?: emptySet()

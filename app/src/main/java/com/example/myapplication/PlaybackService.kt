@@ -87,6 +87,7 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
             tts.setAudioAttributes(audioAttributes)
             tts.language = Locale("he", "IL")
             ttsReady = true
+            // Language will be set per article in playNext()
             tts.setSpeechRate(currentSpeed)
             tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {}
@@ -124,7 +125,7 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
         val sharedPrefs = getSharedPreferences("creplaz_prefs", MODE_PRIVATE)
         val titles = sharedPrefs.getStringSet("article_titles", emptySet())?.toMutableSet() ?: mutableSetOf()
         titles.remove(title)
-        sharedPrefs.edit { 
+        sharedPrefs.edit(commit = true) { 
             putStringSet("article_titles", titles)
             remove("article_content_$title")
             remove("article_date_$title")
@@ -214,6 +215,11 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
             lastCharIndex = 0
             currentTimeSecs = 0
             
+            if (ttsReady) {
+                val hasHebrew = currentArticleText.any { it in '\u0590'..'\u05FF' }
+                tts.language = if (hasHebrew) Locale("he", "IL") else Locale.US
+            }
+
             mediaSession?.setMetadata(MediaMetadataCompat.Builder()
                 .putString(MediaMetadataCompat.METADATA_KEY_TITLE, article.title)
                 .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, "Creplaz News")
@@ -221,6 +227,7 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
                 
             resumeAt(0)
             showNotification()
+            updateUI()
         }
     }
 

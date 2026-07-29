@@ -140,7 +140,27 @@ class ScanWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 val groupDate = if (articleDate != null) sdf.format(articleDate) else "Recent"
 
                 val title = articleDoc.select("h1, .entry-title, .post-title").first()?.text() ?: articleDoc.title()
-                val content = articleDoc.select(".entry-content p, .post-content p, article p").text()
+                
+                // Improved content extraction: filter out English-only paragraphs at the end of Hebrew articles
+                val paragraphs = articleDoc.select(".entry-content p, .post-content p, article p")
+                val contentBuilder = StringBuilder()
+                var hasHebrewInArticle = false
+                
+                val pTexts = paragraphs.map { it.text() }.filter { it.length > 20 }
+                
+                for (pText in pTexts) {
+                    val hasHebrew = pText.any { it in '\u0590'..'\u05FF' }
+                    if (hasHebrew) hasHebrewInArticle = true
+                    
+                    if (hasHebrewInArticle && !hasHebrew && pText.length > 200) {
+                        val remaining = pTexts.subList(pTexts.indexOf(pText), pTexts.size)
+                        val anyHebrewLeft = remaining.any { rel -> rel.any { c -> c in '\u0590'..'\u05FF' } }
+                        if (!anyHebrewLeft) break
+                    }
+                    contentBuilder.append(pText).append(" ")
+                }
+                
+                val content = contentBuilder.toString().trim()
                 
                 if (content.length > 100) {
                     val currentTitles = sharedPrefs.getStringSet("article_titles", emptySet()) ?: emptySet()
