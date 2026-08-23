@@ -1,5 +1,11 @@
 <resources>
     <string name="app_name">creplaz</string>
+    <string name="version_prefix">v%s</string>
+    <string name="starting_scan">Starting multi-scan…</string>
+    <string name="found_articles">Found articles… (%d new)</string>
+    <string name="scan_complete">Multi-scan complete. %d new items.</string>
+    <string name="daily_scan_scheduled">Daily scan scheduled for %s</string>
+    <string name="next_scan_at">Next scan at %s</string>
     <string-array name="source_types">
         <item>Website</item>
         <item>Telegram</item>

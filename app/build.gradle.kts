@@ -54,6 +54,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    buildFeatures {
+        resValues = true
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -65,20 +69,20 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = "11"
+        jvmTarget = "17"
     }
+}
 
-    @Suppress("UnstableApiUsage")
-    androidComponents {
-        onVariants { variant ->
-            variant.outputs.forEach { output ->
-                val name = "creplaz-${variant.name}.apk"
-                (output as com.android.build.api.variant.impl.VariantOutputImpl).outputFileName.set(name)
-            }
+@Suppress("UnstableApiUsage")
+androidComponents {
+    onVariants { variant ->
+        variant.outputs.forEach { output ->
+            val name = "creplaz-${variant.name}.apk"
+            (output as com.android.build.api.variant.impl.VariantOutputImpl).outputFileName.set(name)
         }
     }
 }

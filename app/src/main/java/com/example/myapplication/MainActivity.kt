@@ -13,6 +13,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.edit
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.isEmpty
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -28,7 +29,11 @@ import java.util.concurrent.TimeUnit
 
 data class Article(val title: String, val content: String, val date: String = "Recent", val url: String = "")
 
-class ArticleAdapter(private val articles: MutableList<Article>, private val onItemClick: (Article) -> Unit) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+class ArticleAdapter(
+    private val articles: MutableList<Article>,
+    private val onItemClick: (Article) -> Unit,
+    private val onItemLongClick: (View, Article) -> Unit
+) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     private val typeHeader = 0
     private val typeItem = 1
     private var displayList = mutableListOf<Any>()
@@ -39,7 +44,7 @@ class ArticleAdapter(private val articles: MutableList<Article>, private val onI
         displayList.clear()
         val sdf = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
         fun getLabel(d: String): String {
-            if (d == "Today" || d == "Recent" || d == "Saved") return d
+            if ((d == "Today") || (d == "Recent") || (d == "Saved")) return d
             return try {
                 sdf.parse(d) ?: return d
                 val now = Calendar.getInstance()
@@ -79,6 +84,10 @@ class ArticleAdapter(private val articles: MutableList<Article>, private val onI
             val article = displayList[position] as Article
             holder.tvTitle.text = article.title
             holder.itemView.setOnClickListener { onItemClick(article) }
+            holder.itemView.setOnLongClickListener { 
+                onItemLongClick(it, article)
+                true 
+            }
         }
     }
     override fun getItemCount() = displayList.size
@@ -138,7 +147,8 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     tvStatus.text = if (isPlaying) "Playing: $topTitle" else if (playlistSize > 0) "Paused" else "No articles"
 
-                    if (playlistSize != articlePlaylist.size) {
+                    val currentTop = if (articlePlaylist.isNotEmpty()) articlePlaylist[0].title else ""
+                    if (playlistSize != articlePlaylist.size || topTitle != currentTop) {
                         loadSavedArticles()
                     }
                 }
@@ -171,16 +181,11 @@ class MainActivity : AppCompatActivity() {
         tvVersion = findViewById(R.id.tvVersion)
         rvArticles = findViewById(R.id.rvArticles)
         
-        adapter = ArticleAdapter(articlePlaylist) { article ->
-            if (article.url.isNotEmpty()) {
-                try {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(article.url))
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Could not open link", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
+        adapter = ArticleAdapter(articlePlaylist, { article ->
+            playbackService?.playArticle(article)
+        }, { view, article ->
+            showArticlePopup(view, article)
+        })
         rvArticles.layoutManager = LinearLayoutManager(this)
         rvArticles.adapter = adapter
 
@@ -212,7 +217,7 @@ class MainActivity : AppCompatActivity() {
                 @Suppress("DEPRECATION")
                 packageManager.getPackageInfo(packageName, 0)
             }
-            tvVersion.text = "v${pInfo.versionName}"
+            tvVersion.text = getString(R.string.version_prefix, pInfo.versionName)
         } catch (_: Exception) { tvVersion.text = "v" }
 
         btnScan.setOnClickListener { showScanDaysDialog() }
@@ -281,7 +286,7 @@ class MainActivity : AppCompatActivity() {
             val parts = it.split("|")
             if (parts.size == 2) addSourceRow(parts[0], parts[1])
         }
-        if (llSources.childCount == 0) addSourceRow()
+        if (llSources.isEmpty()) addSourceRow()
 
         btnAddSource.setOnClickListener { addSourceRow() }
 
@@ -321,7 +326,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startMultiScan(sources: List<String>, daysBack: Int) {
-        tvStatus.text = "Starting multi-scan..."
+        tvStatus.text = getString(R.string.starting_scan)
         btnScan.isEnabled = false
         lifecycleScope.launch {
             var totalAdded = 0
@@ -333,11 +338,12 @@ class MainActivity : AppCompatActivity() {
                 
                 try {
                     val links = if (type == "telegram") {
-                        val channel = value.replace("https://t.me/s/", "").replace("https://t.me/", "").replace("@", "").trim().split("/")[0]
+                        val channel = value.trim().split("/").last().replace("@", "")
                         val url = "https://t.me/s/$channel"
                         val doc = withContext(Dispatchers.IO) { Jsoup.connect(url).userAgent("Mozilla/5.0").timeout(20000).get() }
                         doc.select(".tgme_widget_message_text a[href], .tgme_widget_message_inline_button, a.tgme_widget_message_link_preview")
-                            .map { it.attr("abs:href") }.distinct().filter { it.length > 20 && !it.contains("t.me/") }
+                            .map { it.attr("abs:href") }.distinct()
+                            .filter { it.length > 20 && !it.contains("t.me/") && !it.contains("facebook.com") && !it.contains("twitter.com") && !it.contains("instagram.com") && !it.contains("linkedin.com") }
                     } else {
                         val doc = withContext(Dispatchers.IO) { Jsoup.connect(value).userAgent("Mozilla/5.0").timeout(20000).get() }
                         doc.select("article a[href], .post-item a[href], h2 a[href], h3 a[href]").map { it.attr("abs:href") }.distinct()
@@ -346,7 +352,7 @@ class MainActivity : AppCompatActivity() {
                     totalAdded += processLinksForMultiScan(links, daysBack)
                 } catch (_: Exception) {}
             }
-            tvStatus.text = "Multi-scan complete. $totalAdded new items."
+            tvStatus.text = getString(R.string.scan_complete, totalAdded)
             btnScan.isEnabled = true
             playbackService?.setPlaylist(articlePlaylist)
         }
@@ -356,23 +362,58 @@ class MainActivity : AppCompatActivity() {
         val sharedPrefs = getSharedPreferences("creplaz_prefs", MODE_PRIVATE)
         var addedCount = 0
         val sdf = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
-        val calendar = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -daysBack); set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0) }
+        val calendar = Calendar.getInstance().apply { 
+            add(Calendar.DAY_OF_YEAR, -daysBack)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
         val limitDate = calendar.time
 
         for (link in links) {
             try {
                 val articleDoc = withContext(Dispatchers.IO) { Jsoup.connect(link).userAgent("Mozilla/5.0").timeout(10000).get() }
-                val dateText = articleDoc.select(".post-date, time, .date").text()
+                val timeElement = articleDoc.select("time[datetime]").first()
+                val dateAttr = timeElement?.attr("datetime")
+                val dateText = articleDoc.select(".post-date, .entry-date, time, .date, .meta").text()
                 var articleDate: Date? = null
-                val match = Regex("(\\d{1,2})[./](\\d{1,2})[./](\\d{4})").find(dateText)
-                if (match != null) articleDate = sdf.parse(match.value.replace("/", "."))
+
+                if (!dateAttr.isNullOrEmpty()) {
+                    try {
+                        val isoSdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                        articleDate = isoSdf.parse(dateAttr.substring(0, 10))
+                    } catch (_: Exception) {}
+                }
+
+                if (articleDate == null) {
+                    val dateRegex = Regex("(\\d{1,2})[./-](\\d{1,2})[./-](\\d{4})")
+                    val match = dateRegex.find(dateText)
+                    if (match != null) {
+                        try {
+                            val cleanDate = match.value.replace("/", ".").replace("-", ".")
+                            articleDate = sdf.parse(cleanDate)
+                        } catch (_: Exception) {}
+                    }
+                }
+
+                if (articleDate == null) {
+                    val urlDateRegex = Regex("/(\\d{4})/(\\d{2})/(\\d{2})/")
+                    val match = urlDateRegex.find(link)
+                    if (match != null) {
+                        try {
+                            val urlDateStr = "${match.groupValues[3]}.${match.groupValues[2]}.${match.groupValues[1]}"
+                            articleDate = sdf.parse(urlDateStr)
+                        } catch (_: Exception) {}
+                    }
+                }
                 
                 if (articleDate != null && articleDate.before(limitDate)) continue
                 val groupDate = if (articleDate != null) sdf.format(articleDate) else "Recent"
-                val title = articleDoc.select("h1, .entry-title").first()?.text() ?: articleDoc.title()
+                val title = articleDoc.select("h1, .entry-title, .post-title").first()?.text() ?: articleDoc.title()
                 
                 // Improved content extraction: filter out English-only paragraphs at the end of Hebrew articles
-                val paragraphs = articleDoc.select(".entry-content p, article p")
+                val paragraphs = articleDoc.select(".entry-content p, .post-content p, article p")
                 val contentBuilder = StringBuilder()
                 var hasHebrewInArticle = false
                 
@@ -400,9 +441,8 @@ class MainActivity : AppCompatActivity() {
                 val historyTitles = sharedPrefs.getStringSet("history_titles", emptySet()) ?: emptySet()
 
                 if (content.length > 100 && !currentTitles.contains(title) && !historyTitles.contains(title)) {
-                    val article = Article(title, content, groupDate)
+                    val article = Article(title, content, groupDate, link)
                     articlePlaylist.add(article); addedCount++
-                    runOnUiThread { adapter.updateDisplayList(); tvStatus.text = "Found articles... ($addedCount new)" ; hsvControls.visibility = View.VISIBLE }
                     
                     val newTitles = currentTitles.toMutableSet().apply { add(title) }
                     val newHistory = historyTitles.toMutableSet().apply { add(title) }
@@ -418,6 +458,7 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {}
             if (articlePlaylist.size >= 100) break
         }
+        runOnUiThread { adapter.updateDisplayList(); hsvControls.visibility = View.VISIBLE }
         return addedCount
     }
 
@@ -432,8 +473,8 @@ class MainActivity : AppCompatActivity() {
         val savedHour = sharedPrefs.getInt("schedule_hour", -1)
         val savedMinute = sharedPrefs.getInt("schedule_minute", -1)
         val calendar = Calendar.getInstance()
-        val hour = if (savedHour != -1) savedHour else calendar.get(Calendar.HOUR_OF_DAY)
-        val minute = if (savedMinute != -1) savedMinute else calendar.get(Calendar.MINUTE)
+        val hour = if (savedHour != -1) savedHour else calendar[Calendar.HOUR_OF_DAY]
+        val minute = if (savedMinute != -1) savedMinute else calendar[Calendar.MINUTE]
 
         TimePickerDialog(this, { _, selectedHour, selectedMinute ->
             saveAndScheduleDailyScan(selectedHour, selectedMinute)
@@ -452,7 +493,8 @@ class MainActivity : AppCompatActivity() {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
         WorkManager.getInstance(this).enqueueUniquePeriodicWork("daily_scan", ExistingPeriodicWorkPolicy.REPLACE, scanRequest)
-        tvStatus.text = "Daily scan scheduled for ${String.format(Locale.getDefault(), "%02d:%02d", hour, minute)}"
+        val scheduledTime = String.format(Locale.getDefault(), "%02d:%02d", hour, minute)
+        tvStatus.text = getString(R.string.daily_scan_scheduled, scheduledTime)
     }
 
     private fun showSavedScheduleStatus() {
@@ -461,7 +503,7 @@ class MainActivity : AppCompatActivity() {
         val minute = sharedPrefs.getInt("schedule_minute", -1)
         if (hour != -1 && minute != -1) {
             val timeStr = String.format(Locale.getDefault(), "%02d:%02d", hour, minute)
-            if (articlePlaylist.isEmpty()) tvStatus.text = "Next scan at $timeStr"
+            if (articlePlaylist.isEmpty()) tvStatus.text = getString(R.string.next_scan_at, timeStr)
         }
     }
 
@@ -472,22 +514,36 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadSavedArticles() {
-        val sharedPrefs = getSharedPreferences("creplaz_prefs", MODE_PRIVATE)
-        val titles = sharedPrefs.getStringSet("article_titles", emptySet()) ?: emptySet()
-        articlePlaylist.clear()
-        titles.forEach { title ->
-            val content = sharedPrefs.getString("article_content_$title", "") ?: ""
-            val date = sharedPrefs.getString("article_date_$title", "Saved") ?: "Saved"
-            val url = sharedPrefs.getString("article_url_$title", "") ?: ""
-            articlePlaylist.add(Article(title, content, date, url))
-        }
-        runOnUiThread {
-            if (articlePlaylist.isNotEmpty()) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val sharedPrefs = getSharedPreferences("creplaz_prefs", MODE_PRIVATE)
+            val titles = sharedPrefs.getStringSet("article_titles", emptySet()) ?: emptySet()
+            
+            val newPlaylist = mutableListOf<Article>()
+            titles.forEach { title ->
+                val content = sharedPrefs.getString("article_content_$title", "") ?: ""
+                val date = sharedPrefs.getString("article_date_$title", "Saved") ?: "Saved"
+                val url = sharedPrefs.getString("article_url_$title", "") ?: ""
+                newPlaylist.add(Article(title, content, date, url))
+            }
+            
+            sortArticles(newPlaylist)
+
+            withContext(Dispatchers.Main) {
+                articlePlaylist.clear()
+                articlePlaylist.addAll(newPlaylist)
                 adapter.updateDisplayList()
-                hsvControls.visibility = View.VISIBLE
+                hsvControls.visibility = if (articlePlaylist.isNotEmpty()) View.VISIBLE else View.GONE
+                playbackService?.setPlaylist(articlePlaylist)
             }
         }
-        playbackService?.setPlaylist(articlePlaylist)
+    }
+
+    private fun sortArticles(list: MutableList<Article>) {
+        val sdf = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+        list.sortWith(compareByDescending<Article> { 
+            if (it.date == "Today" || it.date == "Recent") Long.MAX_VALUE 
+            else try { sdf.parse(it.date)?.time ?: 0L } catch (_: Exception) { 0L }
+        }.thenByDescending { it.title })
     }
 
     private fun removeArticleFromPrefs(title: String) {
@@ -499,6 +555,26 @@ class MainActivity : AppCompatActivity() {
             remove("article_content_$title")
             remove("article_date_$title")
             remove("article_url_$title")
+            apply()
         }
+    }
+
+    private fun showArticlePopup(view: View, article: Article) {
+        val popup = PopupMenu(this, view)
+        popup.menu.add("Jump to article")
+        popup.setOnMenuItemClickListener {
+            if (article.url.isNotEmpty()) {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(article.url))
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Could not open link", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(this, "No URL available", Toast.LENGTH_SHORT).show()
+            }
+            true
+        }
+        popup.show()
     }
 }

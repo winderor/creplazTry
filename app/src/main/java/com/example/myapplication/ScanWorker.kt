@@ -15,11 +15,11 @@ class ScanWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         Log.d("ScanWorker", "Starting background scan")
         val sharedPrefs = applicationContext.getSharedPreferences("creplaz_prefs", Context.MODE_PRIVATE)
         
-        val savedSources = sharedPrefs.getString("scan_sources", "telegram|https://t.me/geektime") ?: "telegram|https://t.me/geektime"
+        val savedSources = sharedPrefs.getString("scan_sources", "telegram|https://t.me/geektimecoil") ?: "telegram|https://t.me/geektimecoil"
         val sources = savedSources.split(";;").filter { it.isNotEmpty() }
         
-        // Background scan is always for the previous 24h (last 1 day)
-        val daysBack = 1
+        // Use the configured days back from preferences
+        val daysBack = sharedPrefs.getInt("last_days_back", 1)
         val allArticles = mutableListOf<Article>()
 
         for (source in sources) {
@@ -58,12 +58,7 @@ class ScanWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     private fun fetchArticlesFromTelegram(channelName: String, daysBack: Int): List<Article> {
-        val channel = channelName
-            .replace("https://t.me/s/", "")
-            .replace("https://t.me/", "")
-            .replace("@", "")
-            .trim()
-            .split("/")[0]
+        val channel = channelName.trim().split("/").last().replace("@", "")
             
         val url = "https://t.me/s/$channel"
         val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -82,7 +77,7 @@ class ScanWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             }
             
             val filteredLinks = links.distinct()
-                .filter { (it.length > 20) && !it.contains("t.me/") && !it.contains("facebook.com") && !it.contains("twitter.com") && !it.contains("instagram.com") }
+                .filter { (it.length > 20) && !it.contains("t.me/") && !it.contains("facebook.com") && !it.contains("twitter.com") && !it.contains("instagram.com") && !it.contains("linkedin.com") }
             processLinks(filteredLinks, daysBack)
         } catch (_: Exception) { emptyList() }
     }
@@ -117,11 +112,12 @@ class ScanWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     } catch (_: Exception) {}
                 }
                 if ((articleDate == null) && dateText.isNotEmpty()) {
-                    val dateRegex = Regex("(\\d{1,2})[./](\\d{1,2})[./](\\d{4})")
+                    val dateRegex = Regex("(\\d{1,2})[./-](\\d{1,2})[./-](\\d{4})")
                     val match = dateRegex.find(dateText)
                     if (match != null) {
                         try {
-                            articleDate = sdf.parse(match.value.replace("/", "."))
+                            val cleanDate = match.value.replace("/", ".").replace("-", ".")
+                            articleDate = sdf.parse(cleanDate)
                         } catch (_: Exception) {}
                     }
                 }
@@ -136,7 +132,7 @@ class ScanWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     }
                 }
 
-                if (articleDate != null && articleDate.before(limitDate)) continue
+                if ((articleDate != null) && articleDate.before(limitDate)) continue
                 val groupDate = if (articleDate != null) sdf.format(articleDate) else "Recent"
 
                 val title = articleDoc.select("h1, .entry-title, .post-title").first()?.text() ?: articleDoc.title()
@@ -167,7 +163,7 @@ class ScanWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     val historyTitles = sharedPrefs.getStringSet("history_titles", emptySet()) ?: emptySet()
                     
                     if (!currentTitles.contains(title) && !historyTitles.contains(title)) {
-                        result.add(Article(title, content, groupDate))
+                        result.add(Article(title, content, groupDate, link))
                     }
                 }
             } catch (_: Exception) {}
@@ -188,6 +184,7 @@ class ScanWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 sharedPrefs.edit {
                     putString("article_content_${article.title}", article.content)
                     putString("article_date_${article.title}", article.date)
+                    putString("article_url_${article.title}", article.url)
                 }
             }
         }

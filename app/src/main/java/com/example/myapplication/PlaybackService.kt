@@ -20,6 +20,7 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
     private var ttsReady = false
     private var mediaSession: MediaSessionCompat? = null
     private val playlist = mutableListOf<Article>()
+    private var currentlyPlayingArticle: Article? = null
     private var isPlaying = false
     private var currentSpeed = 1.0f
     private var lastCharIndex = 0
@@ -85,26 +86,33 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build()
             tts.setAudioAttributes(audioAttributes)
-            tts.language = Locale("he", "IL")
+            tts.language = Locale.forLanguageTag("he-IL")
             ttsReady = true
             // Language will be set per article in playNext()
             tts.setSpeechRate(currentSpeed)
             tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {}
+                override fun onStart(utteranceId: String?) {
+                    android.util.Log.d("PlaybackService", "TTS Start: $utteranceId")
+                }
                 override fun onDone(utteranceId: String?) {
-                    if (utteranceId != currentUtteranceId) return
+                    android.util.Log.d("PlaybackService", "TTS Done: $utteranceId, currentUtteranceId: $currentUtteranceId")
+                    if (utteranceId != currentUtteranceId && utteranceId?.contains("_part_") == false) return
+                    
                     Handler(Looper.getMainLooper()).post {
-                        if (isPlaying && playlist.isNotEmpty()) {
-                            val removed = playlist.removeAt(0)
-                            removeArticleFromPrefs(removed.title)
+                        if (currentlyPlayingArticle != null) {
+                            val titleToRemove = currentlyPlayingArticle!!.title
+                            android.util.Log.d("PlaybackService", "Removing finished article: $titleToRemove")
+                            playlist.removeAll { it.title == titleToRemove }
+                            removeArticleFromPrefs(titleToRemove)
+                            currentlyPlayingArticle = null
+                            
                             lastCharIndex = 0
                             currentArticleText = "" 
                             if (playlist.isNotEmpty()) {
-                                playNext()
+                                if (isPlaying) playNext() else updateUI()
                             } else {
                                 stop()
                             }
-                            updateUI()
                         }
                     }
                 }
@@ -112,6 +120,7 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
                 override fun onError(utteranceId: String?) { 
                     Handler(Looper.getMainLooper()).post { stop() } 
                 }
+                override fun onStop(utteranceId: String?, interrupted: Boolean) {}
                 override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
                     val offset = utteranceId?.split("_offset_")?.lastOrNull()?.toIntOrNull() ?: 0
                     lastCharIndex = offset + start
@@ -125,11 +134,12 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
         val sharedPrefs = getSharedPreferences("creplaz_prefs", MODE_PRIVATE)
         val titles = sharedPrefs.getStringSet("article_titles", emptySet())?.toMutableSet() ?: mutableSetOf()
         titles.remove(title)
-        sharedPrefs.edit(commit = true) { 
+        sharedPrefs.edit { 
             putStringSet("article_titles", titles)
             remove("article_content_$title")
             remove("article_date_$title")
             remove("article_url_$title")
+            apply()
         }
     }
 
@@ -146,6 +156,19 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
                 resumeAt(lastCharIndex)
             }
         }
+    }
+
+    fun playArticle(article: Article) {
+        val index = playlist.indexOfFirst { it.title == article.title }
+        if (index != -1) {
+            val item = playlist.removeAt(index)
+            playlist.add(0, item)
+        } else {
+            playlist.add(0, article)
+        }
+        currentArticleText = "" // Force reload content
+        lastCharIndex = 0
+        play()
     }
 
     fun play() {
@@ -185,20 +208,29 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
     fun skip() {
         tts.stop()
         lastCharIndex = 0
-        if (playlist.isNotEmpty()) {
-            val removed = playlist.removeAt(0)
-            removeArticleFromPrefs(removed.title)
-            if (playlist.isEmpty()) {
-                stop()
-            } else {
-                if (isPlaying) playNext() else updateUI()
+        currentlyPlayingArticle?.let { 
+            val titleToRemove = it.title
+            playlist.removeAll { art -> art.title == titleToRemove }
+            removeArticleFromPrefs(titleToRemove)
+        } ?: run {
+            if (playlist.isNotEmpty()) {
+                val removed = playlist.removeAt(0)
+                removeArticleFromPrefs(removed.title)
             }
+        }
+        
+        currentlyPlayingArticle = null
+        if (playlist.isEmpty()) {
+            stop()
+        } else {
+            if (isPlaying) playNext() else updateUI()
         }
     }
 
     fun stop() {
         isPlaying = false
         currentUtteranceId = null
+        currentlyPlayingArticle = null
         tts.stop()
         lastCharIndex = 0
         currentTimeSecs = 0
@@ -210,14 +242,15 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
 
     private fun playNext() {
         if (playlist.isNotEmpty()) {
-            val article = playlist[0]
+            currentlyPlayingArticle = playlist[0]
+            val article = currentlyPlayingArticle!!
             currentArticleText = "Title: ${article.title}. Content: ${article.content}"
             lastCharIndex = 0
             currentTimeSecs = 0
             
             if (ttsReady) {
-                val hasHebrew = currentArticleText.any { it in '\u0590'..'\u05FF' }
-                tts.language = if (hasHebrew) Locale("he", "IL") else Locale.US
+                val hasHebrew = currentArticleText.any { (it in '\u0590'..'\u05FF') }
+                tts.language = if (hasHebrew) Locale.forLanguageTag("he-IL") else Locale.US
             }
 
             mediaSession?.setMetadata(MediaMetadataCompat.Builder()
@@ -329,25 +362,6 @@ class PlaybackService : Service(), TextToSpeech.OnInitListener {
         intent.putExtra("topTitle", if (playlist.isNotEmpty()) playlist[0].title else "")
         
         sendBroadcast(intent)
-    }
-
-    private fun formatTime(seconds: Int): String {
-        val m = seconds / 60
-        val s = seconds % 60
-        return String.format(Locale.getDefault(), "%02d:%02d", m, s)
-    }
-
-    fun seekTo(progressPercentage: Int) {
-        if (currentArticleText.isNotEmpty()) {
-            val newIndex = (currentArticleText.length * progressPercentage) / 100
-            lastCharIndex = newIndex
-            currentTimeSecs = lastCharIndex / 15
-            if (isPlaying) {
-                resumeAt(lastCharIndex)
-            } else {
-                updateUI()
-            }
-        }
     }
 
     override fun onDestroy() {
